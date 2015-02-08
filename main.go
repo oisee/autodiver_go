@@ -9,8 +9,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"runtime"
+	"sort"
 
 	"github.com/disintegration/imaging"
 )
@@ -40,7 +40,7 @@ func (slice ColorRatings) Swap(i, j int) {
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU()) // allow to utilize all CPU to achieve maximum perfomance
-	
+
 	var err error
 	var rating int
 
@@ -49,9 +49,9 @@ func main() {
 	var scale_step int
 	var offsets bool
 
-	flag.StringVar(&img_path, "i", "peep.png", "input image")
-	flag.IntVar(&scale, "s", 0, "scale from 256 to scale")
-	flag.IntVar(&scale_step, "ss", 1, "scale step")
+	flag.StringVar(&img_path, "i", "geometry.png", "input image")
+	flag.IntVar(&scale, "s",64, "scale from 256 to scale")
+	flag.IntVar(&scale_step, "ss", 4, "scale step")
 	flag.BoolVar(&offsets, "o", true, "rate all 64 offsets")
 	flag.Parse()
 
@@ -103,7 +103,7 @@ func perform_mutations(img image.Image, scale, scale_step int, offsets bool) {
 				for xoff := 0; xoff < 8; xoff++ {
 					new_img = mutate_image(img, cscale, xoff, yoff)
 					rating := rate_image(new_img)
-					fmt.Printf("New Image scale: %v, xoff: %v, yoff:%v, rating: %v \n", new_img, cscale, xoff, yoff, rating)
+					fmt.Printf("New Image scale: %v, xoff: %v, yoff:%v, rating: %v \n", cscale, xoff, yoff, rating)
 				}
 			}
 		}
@@ -119,13 +119,18 @@ func perform_mutations(img image.Image, scale, scale_step int, offsets bool) {
 }
 
 func mutate_image(img image.Image, scale int, xoffset, yoffset int) (new_image image.Image) {
+	var scaled_image image.Image
 	if scale == min_xscale {
-		new_image = imaging.Resize(img, scale, 0 , imaging.Box )		
+		scaled_image = imaging.Resize(img, scale, 0, imaging.Box)
 	} else {
-		new_image = imaging.CropCenter(imaging.Resize(img, scale, 0 , imaging.Box ), min_xscale, min_yscale)
+		scaled_image = imaging.CropCenter(imaging.Resize(img, scale, 0, imaging.Box), min_xscale, min_yscale)
 	}
-
-	
+	if xoffset == 0 && yoffset == 0 {
+		new_image = scaled_image
+	} else {
+		new_image = imaging.New(min_xscale, min_yscale, color.Black)
+		new_image = imaging.Paste( new_image, scaled_image, image.Pt(xoffset,yoffset) ) 
+	}
 	return
 }
 
