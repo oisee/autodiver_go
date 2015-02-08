@@ -1,0 +1,6 @@
+.project
+./eval/*
+./eval
+./best
+./best/*
+*.png
