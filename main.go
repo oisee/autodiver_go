@@ -26,35 +26,48 @@ type ColorRating struct {
 }
 type ColorRatings []ColorRating
 
-func (slice ColorRatings) Len() int {
-	return len(slice)
+type MutationStats struct {
+	rating  int
+	xscale  int
+	xoffset int
+	yoffset int
 }
-
-func (slice ColorRatings) Less(i, j int) bool {
-	return slice[i].occurrence > slice[j].occurrence
-}
-
-func (slice ColorRatings) Swap(i, j int) {
-	slice[i], slice[j] = slice[j], slice[i]
-}
+type MutationRating []MutationStats
 
 func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU()) // allow to utilize all CPU to achieve maximum perfomance
-
 	var err error
-	var rating int
 
 	var img_path string // image path
 	var scale int
 	var scale_step int
 	var offsets bool
+	var maxcpu bool
+	var best_dir string
 
-	flag.StringVar(&img_path, "i", "geometry.png", "input image")
-	flag.IntVar(&scale, "s",64, "scale from 256 to scale")
-	flag.IntVar(&scale_step, "ss", 4, "scale step")
+	//flag.StringVar(&img_path, "i", "geometry.png", "input image")
+	//flag.StringVar(&best_dir, "b", "./best", "output directory")
+	flag.Usage = usage
+	flag.IntVar(&scale, "s", 0, "scale from 256 to (256 + <argument>)")
+	flag.IntVar(&scale_step, "ss", 1, "scale step")
 	flag.BoolVar(&offsets, "o", true, "rate all 64 offsets")
-	flag.Parse()
+	flag.BoolVar(&maxcpu, "maxcpu", true, "allow max cpu usage")
 
+	flag.Parse()
+	//------------------------
+	img_path = flag.Arg(0)
+	if img_path == "" {
+		flag.Usage()
+		log.Fatal()
+	}
+
+	best_dir = flag.Arg(1)
+	if best_dir == "" {
+		best_dir = "./best"
+	}
+
+	if maxcpu {
+		runtime.GOMAXPROCS(runtime.NumCPU()) // allow to utilize all CPU to achieve maximum perfomance
+	}
 	if scale_step <= 0 {
 		scale_step = 1
 	}
@@ -66,59 +79,98 @@ func main() {
 
 	mask_path := filepath.Dir(img_path) + "mask_" + filepath.Base(img_path)
 	mask, err := load_image(mask_path)
-	if err != nil {
-		perform_mutations(img, scale, scale_step, offsets)
-		//rating = rate_image(img)
-	} else {
-		perform_mutations_with_mask(img, mask, scale, scale_step, offsets)
-		//rating = rate_image_with_mask(img,mask)
+
+	muta_rating := perform_mutations(img, mask, scale, scale_step, offsets)
+	sort.Sort(muta_rating)
+
+	//fmt.Printf("Muta rating: %v \n", muta_rating)
+
+	best := muta_rating[0:8]
+	worst := muta_rating[len(muta_rating)-2 : len(muta_rating)-1]
+
+	if exists(best_dir) == false {
+		os.Mkdir(best_dir, 0777)
 	}
 
-	fmt.Printf("Mask: %v \n", mask_path)
-	fmt.Printf("Scale: %v \n", scale)
-	fmt.Printf("Scale Step: %v \n", scale_step)
-	fmt.Printf("Rating of file %v is %v \n", img_path, rating)
-
-	//	for i, s := range flag.Args() {
-	//		fmt.Printf(" K: %v, V: %v \n", i, s)
-	//	}
-
-	//	files, _ := filepath.Glob("./eval/*.png")
-	//	for _, img_path := range files {
-	//		ColorRating := rate_file(img_path)
-	//		fmt.Printf("ColorRating of file %v is %v \n", img_path, ColorRating)
-	//	}
+	save_images(img_path, mask_path, img, mask, best, "best", best_dir)
+	save_images(img_path, mask_path, img, mask, worst, "worst", best_dir)
 }
 
-func perform_mutations_with_mask(img, mask image.Image, scale, scale_step int, offset bool) {
-	fmt.Println("Perform mutations with mask!")
-}
+func save_images(img_path, mask_path string, img, mask image.Image, best MutationRating, postfix, dir string) {
+	var err error
+	var new_img, new_mask image.Image
+	var new_img_path, new_mask_path string
+	ext := filepath.Ext(img_path)
 
-func perform_mutations(img image.Image, scale, scale_step int, offsets bool) {
-	var new_img image.Image
-	fmt.Println("Perform mutations!")
-	if offsets {
-		for cscale := min_xscale; cscale <= min_xscale+scale; cscale += scale_step {
-			for yoff := 0; yoff < 8; yoff++ {
-				for xoff := 0; xoff < 8; xoff++ {
-					new_img = mutate_image(img, cscale, xoff, yoff)
-					rating := rate_image(new_img)
-					fmt.Printf("New Image scale: %v, xoff: %v, yoff:%v, rating: %v \n", cscale, xoff, yoff, rating)
-				}
+	background := find_background(img)
+
+	for i, v := range best {
+		new_img_path = fmt.Sprintf("%v/%v_%v_%v_rate%v_s%v_xoff%v_yoff%v%v", dir, filepath.Base(img_path), postfix, i, v.rating, v.xscale, v.xoffset, v.yoffset, ext)
+		new_mask_path = fmt.Sprintf("%v/%v_%v_%v_rate%v_s%v_xoff%v_yoff%v%v", dir, filepath.Base(mask_path), postfix, i, v.rating, v.xscale, v.xoffset, v.yoffset, ext)
+
+//		fmt.Printf("New Img Path: %v \n", new_img_path)
+//		fmt.Printf("New Mask Path: %v \n", new_mask_path)
+		if mask == nil {
+			new_img = mutate_image(img, v.xscale, v.xoffset, v.yoffset, background)
+			err = imaging.Save(new_img, new_img_path)
+			if err != nil {
+				log.Fatal(err)
+			}
+		} else {
+			new_img = mutate_image(img, v.xscale, v.xoffset, v.yoffset, background)
+			new_mask = mutate_image(mask, v.xscale, v.xoffset, v.yoffset, background)
+			err = imaging.Save(new_img, new_img_path)
+			if err != nil {
+				log.Fatal(err)
+			}
+			err = imaging.Save(new_mask, new_mask_path)
+			if err != nil {
+				log.Fatal(err)
 			}
 		}
-
-	} else {
-		for cscale := min_xscale; cscale <= min_xscale+scale; cscale += scale_step {
-			new_img = mutate_image(img, cscale, 0, 0)
-			rating := rate_image(new_img)
-			fmt.Printf("New Image scale: %v, xoff: %v, yoff:%v, rating: %v \n", cscale, 0, 0, rating)
-		}
 	}
-	//fmt.Printf("New Image: %v \n", new_img)
+	return
 }
 
-func mutate_image(img image.Image, scale int, xoffset, yoffset int) (new_image image.Image) {
+func perform_mutations(img, mask image.Image, scale, scale_step int, offsets bool) (muta_rating MutationRating) {
+	var new_img, new_mask image.Image
+	var xoffset_max, yoffset_max = 0, 0
+
+	background := find_background(img)
+
+	fmt.Println("image mutation started")
+	if offsets {
+		xoffset_max = cell_xsize
+		yoffset_max = cell_ysize
+	}
+	for cscale := min_xscale; cscale <= min_xscale+scale; cscale += scale_step {
+		fmt.Printf("   Scale:%v\n", scale )
+		for yoff := 0; yoff < yoffset_max; yoff++ {
+			for xoff := 0; xoff < xoffset_max; xoff++ {
+				var rating int
+				if mask == nil {
+					new_img = mutate_image(img, cscale, xoff, yoff, background)
+					rating = rate_image(new_img)
+				} else {
+					new_img = mutate_image(img, cscale, xoff, yoff, background)
+					new_mask = mutate_image(img, cscale, xoff, yoff, color.Black)
+					rating = rate_image_with_mask(new_img, new_mask)
+				}
+				muta_rating = append(muta_rating, MutationStats{rating, cscale, xoff, yoff})
+				//fmt.Printf("New Image scale: %v, xoff: %v, yoff:%v, rating: %v \n", cscale, xoff, yoff, rating)
+				//fmt.Printf("Muta rating: %v \n", muta_rating[len(muta_rating)-1] )
+			}
+		}
+	}
+	fmt.Println("image mutation finished")
+	return
+}
+
+func mutate_image(img image.Image, scale int, xoffset, yoffset int, background color.Color) (new_image image.Image) {
+	if background == nil {
+		background = color.Black
+	}
+
 	var scaled_image image.Image
 	if scale == min_xscale {
 		scaled_image = imaging.Resize(img, scale, 0, imaging.Box)
@@ -128,8 +180,8 @@ func mutate_image(img image.Image, scale int, xoffset, yoffset int) (new_image i
 	if xoffset == 0 && yoffset == 0 {
 		new_image = scaled_image
 	} else {
-		new_image = imaging.New(min_xscale, min_yscale, color.Black)
-		new_image = imaging.Paste( new_image, scaled_image, image.Pt(xoffset,yoffset) ) 
+		new_image = imaging.New(min_xscale, min_yscale, background)
+		new_image = imaging.Paste(new_image, scaled_image, image.Pt(xoffset, yoffset))
 	}
 	return
 }
@@ -169,12 +221,42 @@ func rate_image_with_mask(img, mask image.Image) (image_rating int) {
 	return
 }
 
+func find_background(img image.Image) (background color.Color) {
+	bounds := img.Bounds()
+
+	var color_map map[color.Color]int
+	color_map = make(map[color.Color]int)
+
+	for yp := bounds.Min.Y; yp < bounds.Max.Y; yp++ {
+		for xp := bounds.Min.X; xp < bounds.Max.X; xp++ {
+			color := img.At(xp, yp)
+			color_map[color] += 1
+		}
+	}
+
+	var color_ratings ColorRatings
+
+	for k, v := range color_map {
+		//fmt.Printf ("Key: %v, value: %v \n", k,v )
+
+		color_rating := ColorRating{v, k}
+		color_ratings = append(color_ratings, color_rating)
+
+	}
+
+	sort.Sort(color_ratings)
+
+	background = color_ratings[0].color
+
+	return
+}
+
 func rate_image(img image.Image) (image_rating int) {
 	bounds := img.Bounds()
 
 	xsize := bounds.Max.X - bounds.Min.X
 	ysize := bounds.Max.Y - bounds.Min.X
-	fmt.Printf("Width: %v Height: %v \n", xsize, ysize)
+	//fmt.Printf("Width: %v Height: %v \n", xsize, ysize)
 
 	xcells := int(xsize / cell_xsize)
 	ycells := int(ysize / cell_ysize)
@@ -227,4 +309,42 @@ func rate_image_cell(img image.Image, x, y int) (cell_rating int) {
 	//		fmt.Println("Cell ColorRating:", cell_rating)
 	//	}
 	return
+}
+
+func (slice MutationRating) Len() int {
+	return len(slice)
+}
+func (slice MutationRating) Less(i, j int) bool {
+	return slice[i].rating < slice[j].rating
+}
+func (slice MutationRating) Swap(i, j int) {
+	slice[i], slice[j] = slice[j], slice[i]
+}
+func (slice ColorRatings) Len() int {
+	return len(slice)
+}
+func (slice ColorRatings) Less(i, j int) bool {
+	return slice[i].occurrence > slice[j].occurrence
+}
+func (slice ColorRatings) Swap(i, j int) {
+	slice[i], slice[j] = slice[j], slice[i]
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true
+	}
+	return false
+}
+
+func usage() {
+	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "%s image_file_name.png [./best_dir] [--flags]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "%s image_file_name.png \n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "%s image_file_name.png -s=64 -ss=4\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "%s image_file_name.png ./best -s=10 -ss=1\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "\n")
+	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, "\n")
 }
