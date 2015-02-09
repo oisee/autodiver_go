@@ -59,7 +59,7 @@ func main() {
 
 	flag.Parse()
 	
-	fmt.Println( use_mask, scale, scale_step )
+	//fmt.Println( use_mask, scale, scale_step )
 
 	//------------------------
 	img_path = flag.Arg(0)
